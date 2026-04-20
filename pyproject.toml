@@ -1,0 +1,29 @@
+[project]
+name = "cleanup-mac"
+dynamic = ["version"]
+description = "Safe, auditable cleanup tool for macOS caches, logs, and uninstalled-app leftovers"
+# tarfile.extract's `filter=` keyword (used by the self-updater) is available
+# on 3.12+ and on patched 3.10.12+ / 3.11.4+. Pinning to 3.12 avoids the
+# backport uncertainty for source-run users.
+requires-python = ">=3.12"
+
+[tool.setuptools.dynamic]
+version = {attr = "cleanup_mac._version.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests frequently nest `with patch(...)` and `with pytest.raises(...)`
+# blocks. Combining them reduces readability of what the test actually
+# asserts, so SIM117 is not worth enforcing in this directory.
+"tests/*" = ["SIM117"]
