@@ -150,3 +150,108 @@ def test_min_age_filter(fake_home: Path):
         min_size_bytes=1024 * 1024,
     )
     assert "com.example.Fresh" not in [c.path.name for c in results]
+
+
+def test_infers_plain_app_support_name_from_bundle_id_anchor(fake_home: Path):
+    cache = fake_home / "Library/Caches/com.nextcloud.desktopclient"
+    cache.mkdir()
+    (cache / "data.bin").write_bytes(b"0" * 1024)
+    prefs = fake_home / "Library/Preferences/com.nextcloud.desktopclient.plist"
+    prefs.write_bytes(b"0" * 512)
+    app_support = _make_leftover(
+        fake_home / "Library/Application Support", "Nextcloud", size_mb=2
+    )
+    old = time.time() - 30 * 86400
+    os.utime(cache, (old, old))
+
+    results = scan_leftovers(
+        scan_locations=[
+            fake_home / "Library/Application Support",
+            fake_home / "Library/Caches",
+            fake_home / "Library/Preferences",
+        ],
+        installed_ids=set(),
+        whitelist=BUILTIN_WHITELIST,
+        min_age_days=7,
+        min_size_bytes=1024 * 1024,
+    )
+
+    by_path = {c.path: c for c in results}
+    assert cache in by_path
+    assert prefs in by_path
+    assert app_support in by_path
+    assert "inferred" in by_path[app_support].reason
+    assert "com.nextcloud.desktopclient" in by_path[app_support].reason
+
+
+def test_inference_ignores_generic_bundle_id_tokens(fake_home: Path):
+    _make_leftover(fake_home / "Library/Application Support", "Desktop", size_mb=2)
+    _make_leftover(
+        fake_home / "Library/Application Support", "com.figma.Desktop", size_mb=2
+    )
+
+    results = scan_leftovers(
+        scan_locations=[fake_home / "Library/Application Support"],
+        installed_ids=set(),
+        whitelist=BUILTIN_WHITELIST,
+        min_age_days=7,
+        min_size_bytes=1024 * 1024,
+    )
+
+    names = [c.path.name for c in results]
+    assert "com.figma.Desktop" in names
+    assert "Desktop" not in names
+
+
+def test_plain_names_are_not_inferred_without_bundle_id_anchor(fake_home: Path):
+    _make_leftover(fake_home / "Library/Application Support", "Nextcloud", size_mb=2)
+
+    results = scan_leftovers(
+        scan_locations=[fake_home / "Library/Application Support"],
+        installed_ids=set(),
+        whitelist=BUILTIN_WHITELIST,
+        min_age_days=7,
+        min_size_bytes=1024 * 1024,
+    )
+
+    assert "Nextcloud" not in [c.path.name for c in results]
+
+
+def test_inference_ignores_tokens_still_used_by_installed_apps(fake_home: Path):
+    _make_leftover(fake_home / "Library/Application Support", "Google", size_mb=2)
+    _make_leftover(
+        fake_home / "Library/Application Support", "com.google.GoogleUpdater", size_mb=2
+    )
+
+    results = scan_leftovers(
+        scan_locations=[fake_home / "Library/Application Support"],
+        installed_ids={"com.google.Chrome"},
+        whitelist=BUILTIN_WHITELIST,
+        min_age_days=7,
+        min_size_bytes=1024 * 1024,
+    )
+
+    names = [c.path.name for c in results]
+    assert "com.google.GoogleUpdater" in names
+    assert "Google" not in names
+
+
+def test_inference_ignores_versioned_tokens_used_by_installed_apps(fake_home: Path):
+    _make_leftover(fake_home / "Library/Application Support", "ScreenFlow", size_mb=2)
+    _make_leftover(
+        fake_home / "Library/Application Support",
+        "net.telestream.screenflow.globallibrary",
+        size_mb=2,
+    )
+
+    results = scan_leftovers(
+        scan_locations=[fake_home / "Library/Application Support"],
+        installed_ids={"net.telestream.screenflow10"},
+        whitelist=BUILTIN_WHITELIST,
+        min_age_days=7,
+        min_size_bytes=1024 * 1024,
+    )
+
+    names = [c.path.name for c in results]
+    assert "net.telestream.screenflow.globallibrary" in names
+    assert "ScreenFlow" not in names

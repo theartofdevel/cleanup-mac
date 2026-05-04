@@ -6,7 +6,7 @@ Full documentation. [README.md](README.md) has the short version.
 
 - **User caches** in `~/Library/Caches/`
 - **Logs** in `~/Library/Logs/` (DiagnosticReports kept for 30 days)
-- **Leftovers** — data folders/files in `~/Library/Application Support/`, `Containers/`, `Preferences/`, etc. whose bundle ID no longer matches any installed `.app`
+- **Leftovers** — data folders/files in `~/Library/Application Support/`, `Caches/`, `Containers/`, `Preferences/`, etc. whose bundle ID no longer matches any installed `.app`
 - **Xcode junk** — `DerivedData`, `iOS DeviceSupport` (>90 days), `CoreSimulator/Caches`
 - **Package manager caches** — `brew cleanup`, `npm cache clean`, `yarn cache clean`, `pip cache purge`, `go clean -cache`
 
@@ -28,7 +28,7 @@ Extend the whitelist with `--ignore-file path/to/list.txt` (one glob pattern per
 2. **Trash by default.** `--apply` moves items to the Finder Trash (recoverable). Pass `--permanent` only when you're sure.
 3. **Never-touch paths.** Hardcoded safeguards for Apple, iCloud, Keychains, Mail, Messages, iOS backups — enforced at every deletion.
 4. **Path resolution.** All deletions are preceded by `Path.resolve()` + allowed-root check. Symlinks pointing outside allowed roots are refused.
-5. **Conservative leftover detection.** Only folder names matching a reverse-DNS bundle-ID pattern are considered. Folders like `Spotify` or `JetBrains` are skipped — we match on the `Info.plist` bundle ID only.
+5. **Conservative leftover detection.** Reverse-DNS bundle-ID names are matched against installed `.app` bundle IDs. Plain app names are considered only when a removed bundle-ID leftover provides a strong anchor token, generic tokens such as `desktop` or `client` are ignored, and never-touch/whitelist rules still apply.
 6. **No shell interpolation.** Every subprocess invocation is a list of arguments; no `shell=True` anywhere.
 7. **Full audit log.** Every run writes to `~/Library/Logs/cleanup-mac/YYYY-MM-DD-HHMMSS.log` unless `--no-log`.
 

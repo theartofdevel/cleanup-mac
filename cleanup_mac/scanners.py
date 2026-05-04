@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -111,12 +112,89 @@ def scan_logs(
 
 DEFAULT_LEFTOVER_LOCATIONS: tuple[str, ...] = (
     "Library/Application Support",
+    "Library/Caches",
     "Library/Containers",
     "Library/Group Containers",
     "Library/Preferences",
     "Library/LaunchAgents",
     "Library/Saved Application State",
 )
+
+_GENERIC_BUNDLE_TOKENS: frozenset[str] = frozenset(
+    {
+        "agent",
+        "app",
+        "application",
+        "client",
+        "cloud",
+        "desktop",
+        "desktopclient",
+        "dev",
+        "electron",
+        "helper",
+        "io",
+        "launcher",
+        "mac",
+        "macos",
+        "manager",
+        "net",
+        "org",
+        "service",
+        "sync",
+        "updater",
+    }
+)
+
+_DANGEROUS_INFERRED_NAMES: frozenset[str] = frozenset(
+    {
+        "applications",
+        "desktop",
+        "developer",
+        "documents",
+        "downloads",
+        "library",
+        "mobile documents",
+        "movies",
+        "music",
+        "pictures",
+        "public",
+    }
+)
+
+_INFERRED_STRIPPABLE_SUFFIXES: tuple[str, ...] = (
+    ".log",
+    ".plist",
+    ".savedstate",
+    ".sqlite",
+)
+
+
+def _strong_bundle_tokens(bundle_id: str) -> set[str]:
+    tokens: set[str] = set()
+    for raw in re.split(r"[^a-zA-Z0-9]+", bundle_id):
+        token = raw.lower()
+        if len(token) < 4:
+            continue
+        if token in _GENERIC_BUNDLE_TOKENS:
+            continue
+        tokens.add(token)
+        without_version = re.sub(r"\d+$", "", token)
+        if len(without_version) >= 4 and without_version not in _GENERIC_BUNDLE_TOKENS:
+            tokens.add(without_version)
+    return tokens
+
+
+def _plain_name_matches_token(name: str, token: str) -> bool:
+    lowered = name.lower()
+    for suffix in _INFERRED_STRIPPABLE_SUFFIXES:
+        if lowered.endswith(suffix):
+            lowered = lowered[: -len(suffix)]
+            break
+    if lowered in _DANGEROUS_INFERRED_NAMES:
+        return False
+    if lowered == token:
+        return True
+    return any(lowered.startswith(f"{token}{sep}") for sep in (" ", "-", "_", "."))
 
 
 def default_leftover_scan_locations() -> list[Path]:
@@ -132,9 +210,10 @@ def scan_leftovers(
     min_size_bytes: int,
 ) -> list[Candidate]:
     """Data folders with a bundle-ID name whose app is no longer installed.
-    Non-bundle-ID names are always skipped — false-negative bias."""
+    Plain names are inferred only from strong removed-app bundle-ID anchors."""
     now = time.time()
-    prelim: list[tuple[Path, str]] = []
+    strict_prelim: list[tuple[Path, str, bool]] = []
+    plain_prelim: list[Path] = []
     for loc in scan_locations:
         if not loc.is_dir():
             continue
@@ -143,26 +222,44 @@ def scan_leftovers(
                 continue
             if is_in_whitelist(entry.name, whitelist):
                 continue
-            if not is_bundle_id(entry.name):
-                continue
-            bid = base_id(entry.name)
-            if bid in installed_ids:
-                continue
             try:
                 mtime = entry.stat().st_mtime
             except OSError:
                 continue
             age_days = (now - mtime) / 86400
-            if age_days < min_age_days:
-                continue
-            prelim.append((entry, bid))
+            if is_bundle_id(entry.name):
+                bid = base_id(entry.name)
+                if bid in installed_ids:
+                    continue
+                strict_prelim.append((entry, bid, age_days >= min_age_days))
+            else:
+                if age_days < min_age_days:
+                    continue
+                plain_prelim.append(entry)
 
-    sizes = _util.get_sizes([p for p, _ in prelim])
+    inferred: list[tuple[Path, str, str]] = []
+    inferred_bids: set[str] = set()
+    anchor_prelim = [(entry, bid) for entry, bid, age_ok in strict_prelim if age_ok]
+    installed_tokens = set().union(*(_strong_bundle_tokens(bid) for bid in installed_ids))
+    for entry in plain_prelim:
+        for _, bid in anchor_prelim:
+            for token in _strong_bundle_tokens(bid):
+                if token in installed_tokens:
+                    continue
+                if _plain_name_matches_token(entry.name, token):
+                    inferred.append((entry, bid, token))
+                    inferred_bids.add(bid)
+                    break
+            if inferred and inferred[-1][0] == entry:
+                break
+
+    sizes = _util.get_sizes([p for p, _, _ in strict_prelim] + [p for p, _, _ in inferred])
 
     results: list[Candidate] = []
-    for entry, bid in prelim:
+    seen: set[Path] = set()
+    for entry, bid, age_ok in strict_prelim:
         size = sizes.get(entry, 0)
-        if size < min_size_bytes:
+        if bid not in inferred_bids and (not age_ok or size < min_size_bytes):
             continue
         results.append(
             Candidate(
@@ -172,6 +269,20 @@ def scan_leftovers(
                 reason=f"no app with bundle id {bid}",
             )
         )
+        seen.add(entry)
+    for entry, bid, token in inferred:
+        if entry in seen:
+            continue
+        size = sizes.get(entry, 0)
+        results.append(
+            Candidate(
+                path=entry,
+                size_bytes=size,
+                category="leftover",
+                reason=f'inferred leftover for {bid} via token "{token}"',
+            )
+        )
+        seen.add(entry)
     return results
 
 
