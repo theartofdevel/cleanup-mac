@@ -34,6 +34,7 @@ Built-in self-update:
 ## How it works
 
 1. Scans `~/Library/Caches`, `Logs`, leftovers, Xcode junk, package manager caches.
+   Leftovers use bundle IDs first, then infer plain app folders only from strong removed-app anchors.
 2. Shows dry-run report by default — nothing is deleted without `--apply`.
 3. `--apply` moves items to Finder Trash (recoverable). `--permanent` skips Trash.
 4. Hardcoded never-touch paths (Apple, iCloud, Keychains, Mail, iOS backups).

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import plistlib
 import re
+import subprocess
 from pathlib import Path
 
 BUNDLE_ID_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*(\.[a-zA-Z0-9-]+){1,}$")
@@ -29,16 +30,22 @@ DEFAULT_APP_ROOTS: tuple[Path, ...] = (
     Path("/System/Applications"),
 )
 
-_NESTED_APP_DIRS = ("Contents/Applications", "Contents/Helpers")
+_BUNDLE_SUFFIXES = (".app", ".appex", ".xpc")
+_NESTED_BUNDLE_DIRS = (
+    "Contents/Applications",
+    "Contents/Helpers",
+    "Contents/PlugIns",
+    "Contents/XPCServices",
+)
+_CODESIGN_BIN = "/usr/bin/codesign"
 
 
 def _walk_apps(root: Path):
-    """Yield .app paths under `root`.
+    """Yield application-owned bundle paths under `root`.
 
     Recurses into plain directories (e.g. /Applications/Utilities) and
-    into an .app's Contents/Applications and Contents/Helpers for
-    nested first-class apps (Xcode → Instruments). Does not descend
-    into Frameworks, PlugIns, XPCServices, Resources.
+    into selected bundle subdirectories for nested apps, app extensions,
+    and XPC services. Does not descend into Frameworks or Resources.
     """
     stack = [root]
     while stack:
@@ -56,9 +63,9 @@ def _walk_apps(root: Path):
                 if not is_dir:
                     continue
                 name = entry.name
-                if name.endswith(".app"):
+                if name.endswith(_BUNDLE_SUFFIXES):
                     yield Path(entry.path)
-                    for sub in _NESTED_APP_DIRS:
+                    for sub in _NESTED_BUNDLE_DIRS:
                         stack.append(Path(entry.path) / sub)
                 elif "." not in name:
                     stack.append(Path(entry.path))
@@ -84,4 +91,27 @@ def get_installed_bundle_ids(roots: list[Path] | None = None) -> set[str]:
             bid = data.get("CFBundleIdentifier")
             if isinstance(bid, str) and bid:
                 ids.add(bid)
+            ids.update(_get_application_group_ids(app_path))
     return ids
+
+
+def _get_application_group_ids(app_path: Path) -> set[str]:
+    try:
+        proc = subprocess.run(
+            [_CODESIGN_BIN, "-d", "--entitlements", ":-", str(app_path)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return set()
+    if proc.returncode != 0 or not proc.stdout:
+        return set()
+    try:
+        entitlements = plistlib.loads(proc.stdout)
+    except (plistlib.InvalidFileException, ValueError):
+        return set()
+    groups = entitlements.get("com.apple.security.application-groups")
+    if not isinstance(groups, list):
+        return set()
+    return {group for group in groups if isinstance(group, str) and is_bundle_id(group)}

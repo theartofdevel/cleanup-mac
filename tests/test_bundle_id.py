@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import plistlib
+import subprocess
 from pathlib import Path
 
 from cleanup_mac import base_id, get_installed_bundle_ids, is_bundle_id
@@ -79,3 +80,47 @@ def test_get_installed_bundle_ids_finds_nested_apps(tmp_path: Path):
     ids = get_installed_bundle_ids(roots=[apps])
     assert "com.apple.dt.Xcode" in ids
     assert "com.apple.dt.Instruments" in ids
+
+
+def test_get_installed_bundle_ids_finds_app_extensions(tmp_path: Path):
+    apps = tmp_path / "Applications"
+    apps.mkdir()
+    agenda = _make_app(apps, "Agenda", "com.momenta.agenda.macos")
+    extension = agenda / "Contents/PlugIns/Agenda Widget.appex"
+    (extension / "Contents").mkdir(parents=True)
+    with open(extension / "Contents/Info.plist", "wb") as f:
+        plistlib.dump(
+            {"CFBundleIdentifier": "com.momenta.agenda.macos.extension-widget"}, f
+        )
+
+    ids = get_installed_bundle_ids(roots=[apps])
+    assert "com.momenta.agenda.macos" in ids
+    assert "com.momenta.agenda.macos.extension-widget" in ids
+
+
+def test_get_installed_bundle_ids_includes_application_groups(
+    tmp_path: Path, monkeypatch
+):
+    apps = tmp_path / "Applications"
+    apps.mkdir()
+    _make_app(apps, "Agenda", "com.momenta.agenda.macos")
+
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=plistlib.dumps(
+                {
+                    "com.apple.security.application-groups": [
+                        "WRBK2Z2EG7.group.com.momenta.agenda.macos"
+                    ],
+                }
+            ),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    ids = get_installed_bundle_ids(roots=[apps])
+    assert "com.momenta.agenda.macos" in ids
+    assert "WRBK2Z2EG7.group.com.momenta.agenda.macos" in ids

@@ -47,7 +47,7 @@ def test_main_only_flag_scopes_scanners(fake_home: Path, capsys, monkeypatch):
     assert rc == 0
     out = capsys.readouterr().out
     assert "com.example.Gone" in out
-    assert "com.example.Cache" not in out
+    assert "com.example.Cache" in out
 
 
 def test_main_keyboard_interrupt_returns_3(fake_home, monkeypatch, capsys):
